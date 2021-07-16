@@ -1,47 +1,115 @@
-#test to find expression that correctly computes the area of a circle
-include("al_evo.jl")
+# test to find program tree that correctly computes the area of a circle
+#   or volume of a sphere
+#     Also testing various aspects of julia GP and parallelism
+using Random: Float64, length
+using Distributed
 
 
-#=my_AGE = AGE(30, 30, inputs)
-println(my_AGE.string_form)
 
-println("result: $(eval(Meta.parse(my_AGE.string_form)))")
+println("--------------")
+println(length(Sys.cpu_info()))
+addprocs(7)
+num_procs = nprocs() 
+println(num_procs)
+println("--------------")
 
-A = 3.33333;
-B = 3.33333;
-C = 3.33333;
+@everywhere include("gp.jl")
+println("include concluded")
 
-println("result2: $(eval(my_AGE.expr_form))")
+global areas = [π*(r^2) for r ∈ 1:20]
+@everywhere global volumes = [(4.0/3.0)*π*(r^3) for r ∈ 1:20]
+@everywhere volume_sum = sum(volumes)
 
-@time eval(Meta.parse(my_AGE.string_form))
-@time eval(my_AGE.expr_form)=#
+println("global vars concluded")
+
+@everywhere function evaluate_chrom(t::Program_Tree)
+    error = 0.0
+    global R = 1
+    for i ∈ 1:length(volumes)
+        error += abs(activate(t.root, [R]) - volumes[i])
+        R += 1
+    end
+
+    return volume_sum - error
+end
+
+@everywhere function evaluate_batch(chroms::Array{Program_Tree})
+    fs= []
+    for tree ∈ chroms
+        push!(fs, evaluate_chrom(tree))
+    end
+
+    return fs
+end
+
+println("global funcs concluded")
+
+#--------------- Testing same problem with evolution ------------------ #
+println("\n\nStarting Evolution Test\n")
+
+Random.seed!(1234)
+
+println("pop init: ") 
+#parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
+@time global my_pop = Tree_Pop(21000, 5000, 0, 500, false, "tournament", 0.20, 4, 1)
 
 global stop_cond = false
-global areas = [π*(r^2) for r ∈ 1:100]
-global R = 0
+global gen_count = 1
+global lowest_error = 999999999999.999
 
-global index = 1
-global lowest_error = 9999999.9
+
 while stop_cond == false
-    global index
+    global gen_count
     global lowest_error
-    global areas
-    global R
     global stop_cond
+    global my_pop
+    global volume_sum
 
-    my_AGE = AGE(2,3,['R'])
-    error = 0.0
-    for i ∈ 1:100
-        R = i
-        error += abs(areas[i] - eval(my_AGE.expr_form))
+    println("  GENERATION $gen_count   ")
+    
+    
+    p_fitnesses = []
+    fair_share = Int64(floor(length(my_pop.pop)/num_procs))
+
+    # batch parallel  
+    batch_index = 1    
+    @time begin
+        for i ∈ 1:(num_procs - 1)
+            if i < (num_procs - 1)
+                push!(p_fitnesses, remotecall(evaluate_batch, i + 1, my_pop.pop[batch_index:(batch_index + fair_share - 1)]))
+                batch_index += fair_share
+            else
+                push!(p_fitnesses, remotecall(evaluate_batch, i + 1, my_pop.pop[batch_index:length(my_pop.pop)]))
+            end
+        end
+
+        f_fitnesses = []
+        for i ∈ 1:(num_procs - 1)
+            append!(f_fitnesses, fetch(p_fitnesses[i]))
+        end
+        for i ∈ 1:length(my_pop.pop)
+            my_pop.fitnesses[i] = f_fitnesses[i]
+        end  
     end
-    if error < 1.0
-        stop_cond = true
-        println("AGE found with error $error on attempt $index")
-        println("string_form of AGE: " * my_AGE.string_form)
-    elseif error < lowest_error
-        lowest_error = error
+
+    #non-parallel 
+    #=
+    @time for i ∈ 1:length(my_pop.pop)
+        my_pop.fitnesses[i] = evaluate_chrom(my_pop.pop[i])
+    end    
+    =#
+
+    max_fitness = my_pop.fitnesses[argmax(my_pop.fitnesses)]
+    best_tree = my_pop.pop[argmax(my_pop.fitnesses)]
+    best_error = volume_sum - max_fitness
+
+    if best_error < (lowest_error - 0.001)
+        lowest_error = best_error
+        println("   best_error: $best_error") #, best tree: $(best_tree)")
     end
-    index % 10 == 0 ? println("index: $index, lowest error thus far: $lowest_error") : "egg"
-    index += 1
+
+    @time j next_generation!(my_pop)
+
+    gen_count += 1
+    gen_count > 1000 ? stop_cond = true : "egg"
 end
