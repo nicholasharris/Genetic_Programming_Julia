@@ -155,9 +155,81 @@ function Tree_Pop(pop_size::Int64, elitism::Int64, diversity_elitism::Int64, div
 end
 
 # --------------- Tree Functions -------------------------#
-#prints program tree in a readable fashion, using a postorder traversal
+function print_leaf(p::Leaf)
+    if p.type == "var"
+        if p.single_op !== nothing
+            print("[ $(sops_dict[p.single_op])(var$(p.value)) ]\n")
+        else
+            print("[ var$(p.value) ]\n")
+        end
+    elseif p.type == "const"
+        if p.single_op !== nothing
+            print("[ $(sops_dict[p.single_op])($(p.value)) ]\n")
+        else
+            print("[ $(p.value) ]\n")
+        end
+    elseif p.type == "op"
+        if p.single_op !== nothing
+            print("[ $(sops_dict[p.single_op])($(ops_dict[p.value])) ]\n")
+        else
+            print("[ $(ops_dict[p.value]) ]\n")
+        end
+    end
+end
+
+function print_tree(root::Leaf)
+    if root === nothing
+        return
+    end
+    print_leaf(root)
+    print_subtree(root, "")
+    print("\n")
+end
+
+function print_subtree(root::Leaf, prefix::String)
+    if root === nothing
+        return
+    end
+
+    hasLeft = root.left_child !== nothing
+    hasRight = root.right_child !== nothing
+
+    if hasLeft == false && hasRight == false
+        return
+    end
+
+    print(prefix)
+    if hasLeft == false && hasRight == false
+        return
+    elseif hasLeft && hasRight
+        print("├── ")
+    elseif (hasLeft == false) && hasRight
+        print("└── ")
+    end
+
+    if hasRight
+        printStrand = hasLeft && hasRight && (root.right_child.right_child !== nothing || root.right_child.left_child !== nothing)
+        newPrefix = ""
+        if printStrand
+            newPrefix = prefix * "│   "
+        else
+            newPrefix = prefix * "    "
+        end
+        print_leaf(root.right_child)
+        print_subtree(root.right_child, newPrefix)
+    end
+
+    if hasLeft
+        if hasRight
+            print(prefix)
+        end
+        print("└── ")
+        print_leaf(root.left_child)
+        print_subtree(root.left_child, prefix * "    ")
+    end
 
 
+end
 
 #calculates height of a tree
 function height(leaf)
@@ -357,7 +429,7 @@ function next_generation!(old_pop::Tree_Pop)
         
         #mutate child with some probability
         if rand() < old_pop.mutation_rate
-            mutate!(child, old_pop.num_inputs)
+            child = mutate(child, old_pop.num_inputs, old_pop.max_tree_depth)
         end
         push!(new_pop, child)    
         s_index += 1
@@ -524,9 +596,9 @@ function crossover(t1::Program_Tree, t2::Program_Tree, max_tree_depth::Int64)
             node2.right_child = nothing
         end
 
-        if height(chrom1.root) <= max_tree_depth + 1
+        if height(chrom1.root) <= max_tree_depth
             return chrom1
-        elseif height(chrom2.root) <= max_tree_depth + 1
+        elseif height(chrom2.root) <= max_tree_depth
             return chrom2
         end
     end
@@ -534,38 +606,46 @@ end
 
 
 # mutates a program tree by altering one node at random
-function mutate!(t::Program_Tree, num_inputs::Int64)
-    #select nodes to mutate
-    global new_node = Leaf()
-    global old_node = t.root   
-    while new_node.value === nothing
-        global old_node
-        global new_node
-        if (old_node === nothing)    
-            old_node = t.root   
+function mutate(t::Program_Tree, num_inputs::Int64, max_height::Int64)
+    while true
+        t2 = Program_Tree(t.depth, Leaf())
+        copy_into(t.root, t2.root)
+        #select nodes to mutate
+        global new_node = Leaf()
+        global old_node = t2.root   
+        while new_node.value === nothing
+            global old_node
+            global new_node
+            if (old_node === nothing)    
+                old_node = t2.root   
+            end
+            if rand() < 0.1
+                new_node = old_node
+            end
+            if rand() < 0.5
+                old_node = old_node.left_child
+            else
+                old_node = old_node.right_child
+            end
         end
-        if rand() < 0.1
-            new_node = old_node
-        end
-        if rand() < 0.5
-            old_node = old_node.left_child
-        else
-            old_node = old_node.right_child
-        end
-    end
 
-    roll = rand()
-    if roll < 0.2  #set node to an op
-        initialize_childed(new_node)
-        if new_node.left_child === nothing
-            new_node.left_child = Leaf()
-            initialize_childless(new_node.left_child, num_inputs)
+        roll = rand()
+        if roll < 0.2  #set node to an op
+            initialize_childed(new_node)
+            if new_node.left_child === nothing
+                new_node.left_child = Leaf()
+                initialize_childless(new_node.left_child, num_inputs)
+            end
+            if new_node.right_child === nothing
+                new_node.right_child = Leaf()
+                initialize_childless(new_node.right_child, num_inputs)
+            end
+        else  #set node to a var or const
+            initialize_childless(new_node, num_inputs)
         end
-        if new_node.right_child === nothing
-            new_node.right_child = Leaf()
-            initialize_childless(new_node.right_child, num_inputs)
+
+        if height(t2.root) <= max_height
+            return t2
         end
-    else  #set node to a var or const
-        initialize_childless(new_node, num_inputs)
     end
 end

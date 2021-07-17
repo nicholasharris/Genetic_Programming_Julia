@@ -51,7 +51,7 @@ Random.seed!(1234)
 
 println("pop init: ") 
 #parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
-@time global my_pop = Tree_Pop(21000, 5000, 0, 500, false, "tournament", 0.20, 4, 1)
+@time global my_pop = Tree_Pop(21000, 1000, 0, 500, false, "tournament", 0.20, 5, 1)
 
 global stop_cond = false
 global gen_count = 1
@@ -105,10 +105,12 @@ while stop_cond == false
 
     if best_error < (lowest_error - 0.001)
         lowest_error = best_error
-        println("   best_error: $best_error") #, best tree: $(best_tree)")
+        println("   best_error: $best_error")
+        print("\n")
+        print_tree(best_tree.root)
     end
 
-    @time j next_generation!(my_pop)
+    @time next_generation!(my_pop)
 
     gen_count += 1
     gen_count > 1000 ? stop_cond = true : "egg"
