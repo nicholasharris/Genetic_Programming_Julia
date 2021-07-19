@@ -4,8 +4,6 @@
 using Random: Float64, length
 using Distributed
 
-
-
 println("--------------")
 println(length(Sys.cpu_info()))
 addprocs(7)
@@ -30,7 +28,7 @@ println("global vars concluded")
         R += 1
     end
 
-    return volume_sum - error
+    return max(volume_sum - error, 0)
 end
 
 @everywhere function evaluate_batch(chroms::Array{Program_Tree})
@@ -44,14 +42,14 @@ end
 
 println("global funcs concluded")
 
-#--------------- Testing same problem with evolution ------------------ #
+#--------------- Evolution Experiment ------------------ #
 println("\n\nStarting Evolution Test\n")
 
-Random.seed!(1234)
+#Random.seed!(1234)
 
 println("pop init: ") 
 #parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
-@time global my_pop = Tree_Pop(21000, 1000, 0, 500, false, "tournament", 0.20, 5, 1)
+@time global my_pop = Tree_Pop(21000, 1000, 0, 1000, true, "SUS", 0.20, 5, 1)
 
 global stop_cond = false
 global gen_count = 1
@@ -105,9 +103,12 @@ while stop_cond == false
 
     if best_error < (lowest_error - 0.001)
         lowest_error = best_error
-        println("   best_error: $best_error")
         print("\n")
-        print_tree(best_tree.root)
+        println("   best_error: $best_error")
+        #print_tree(best_tree.root)
+        if best_error < 0.0000000001
+            break
+        end
     end
 
     @time next_generation!(my_pop)
