@@ -51,7 +51,7 @@ function ln(x)
 end
 
 function psqrt(x)
-    return √(abs(x))
+    return √(abs(x)) #keep tricksy false imaginaries away!
 end
 
 function sigmoid(x)
@@ -65,7 +65,7 @@ function gompertz(x) #My name's Gomp
 end
 
 #--------------- Structs, Data Types, and Predefined Objects -------------------#
-#dictionaries for operations and constants in trees
+# dictionaries for operations and constants in trees
 ϕ = (1.0 + √5.0)/2.0;  #golden ratio, because nature loves the golden ratio
 ops_dict = Dict(1 => +, 
                 2 => -,
@@ -84,8 +84,13 @@ sops_dict = Dict(1 => square,
                 7 => psqrt,
                 8 => abs,
                 9 => cube) 
-
-consts_dict = Dict(1 => Float64(π), 2 => 0.0, 3 => 1.0, 4 => 2.0, 5 => 3.0, 6 => ϕ, 7 => Float64(ℯ)) # ℯ is the julia symbol for euler's constant
+consts_dict = Dict(1 => Float64(π), 
+                   2 => 0.0, 
+                   3 => 1.0, 
+                   4 => 2.0, 
+                   5 => 3.0, 
+                   6 => ϕ, 
+                   7 => Float64(ℯ)) # ℯ is the julia symbol for euler's constant
 
 #pulls an operation on 2 arguments from predefined dictionary
 function operation(n, a, b)
@@ -235,21 +240,21 @@ end
 function print_leaf(p::Leaf)
     if p.type == "var"
         if p.single_op !== nothing
-            print("[ $(sops_dict[p.single_op])(var$(p.value)) ]\n")
+            print("<< $(sops_dict[p.single_op])(var$(p.value)) >>\n")
         else
-            print("[ var$(p.value) ]\n")
+            print("<< var$(p.value) >>\n")
         end
     elseif p.type == "const"
         if p.single_op !== nothing
-            print("[ $(sops_dict[p.single_op])($(p.value)) ]\n")
+            print("<< $(sops_dict[p.single_op])($(p.value)) >>\n")
         else
-            print("[ $(p.value) ]\n")
+            print("<< $(p.value) >>\n")
         end
     elseif p.type == "op"
         if p.single_op !== nothing
-            print("[ $(sops_dict[p.single_op])($(ops_dict[p.value])) ]\n")
+            print("<< $(sops_dict[p.single_op])($(ops_dict[p.value])) >>\n")
         else
-            print("[ $(ops_dict[p.value]) ]\n")
+            print("<< $(ops_dict[p.value]) >>\n")
         end
     end
 end
@@ -386,6 +391,60 @@ function copy_into(node::Leaf, new_node::Leaf)
     if node.right_child !== nothing
         new_node.right_child = Leaf()
         copy_into(node.right_child, new_node.right_child)
+    end
+end
+
+#prints program tree to a file so it can be saved and recovered later
+function save_tree(node, outfile::IOStream)
+    if node === nothing
+        write(outfile, "∅ ")
+    else
+        sop_string = "⦱"
+        if node.single_op !== nothing
+            sop_string = string(node.single_op)
+        end
+        write(outfile, sop_string * "|" * node.type * "|" * string(node.value) * " ")
+        save_tree(node.left_child, outfile)
+        save_tree(node.right_child, outfile)
+    end
+end
+
+#reads a tree from a file and loads it into object
+function load_tree!(node, infile::IOStream)
+    s_list =  split(read(infile, String), " ")
+    if length(s_list) < 1
+        return
+    end
+    load_helper!(node, s_list)
+end
+
+#helper function to load tree from pre-processed string format
+function load_helper!(node, s_list::Array)
+    if length(s_list) < 1   #no more data to read
+        return
+    elseif s_list[1] == "∅" #node was recorded as empty
+        popfirst!(s_list)
+        return
+    else # we should have a valid node on our hands
+        element_list = split(s_list[1], "|")
+        if element_list[1] != "⦱" #sop is not none 
+            node.single_op = parse(Int64, element_list[1])
+        end
+        node.type = element_list[2]
+        if node.type == "var" || node.type == "op"
+            node.value = parse(Int64, element_list[3])
+        else
+            node.value = parse(Float64, element_list[3])
+        end
+        node.left_child = Leaf()
+        node.right_child = Leaf()
+        popfirst!(s_list)
+        load_helper!(node.left_child, s_list)
+        load_helper!(node.right_child, s_list)
+        if node.type != "op"
+            node.left_child = nothing
+            node.right_child = nothing
+        end
     end
 end
 

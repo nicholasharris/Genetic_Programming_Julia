@@ -1,6 +1,6 @@
 # test to find program tree that correctly computes the area of a circle
 #   or volume of a sphere
-#     Also testing various aspects of julia GP and parallelism
+# Also testing various aspects of julia GP and parallelism
 using Random: Float64, length
 using Distributed
 
@@ -45,16 +45,17 @@ println("global funcs concluded")
 #--------------- Evolution Experiment ------------------ #
 println("\n\nStarting Evolution Test\n")
 
-#Random.seed!(1234)
+Random.seed!(1234)
 
 println("pop init: ") 
+
 #parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
-@time global my_pop = Tree_Pop(21000, 1000, 0, 1000, true, "SUS", 0.20, 5, 1)
+@time global my_pop = Tree_Pop(42000, 1000, 0, 4200, false, "tournament", 0.20, 4, 1)
+global MAX_GENS = 10
 
 global stop_cond = false
 global gen_count = 1
 global lowest_error = 999999999999.999
-
 
 while stop_cond == false
     global gen_count
@@ -62,12 +63,12 @@ while stop_cond == false
     global stop_cond
     global my_pop
     global volume_sum
+    global MAX_GENS
 
     println("  GENERATION $gen_count   ")
-    
-    
+     
     p_fitnesses = []
-    fair_share = Int64(floor(length(my_pop.pop)/num_procs))
+    fair_share = round(Int, length(my_pop.pop)/(num_procs - 1))
 
     # batch parallel  
     batch_index = 1    
@@ -90,13 +91,6 @@ while stop_cond == false
         end  
     end
 
-    #non-parallel 
-    #=
-    @time for i ∈ 1:length(my_pop.pop)
-        my_pop.fitnesses[i] = evaluate_chrom(my_pop.pop[i])
-    end    
-    =#
-
     max_fitness = my_pop.fitnesses[argmax(my_pop.fitnesses)]
     best_tree = my_pop.pop[argmax(my_pop.fitnesses)]
     best_error = volume_sum - max_fitness
@@ -104,8 +98,8 @@ while stop_cond == false
     if best_error < (lowest_error - 0.001)
         lowest_error = best_error
         print("\n")
-        println("   best_error: $best_error")
-        #print_tree(best_tree.root)
+        println("   best_error: $best_error ($((best_error/volume_sum)*100)% error of true result)\n")
+        print_tree(best_tree.root)
         if best_error < 0.0000000001
             break
         end
@@ -114,5 +108,24 @@ while stop_cond == false
     @time next_generation!(my_pop)
 
     gen_count += 1
-    gen_count > 1000 ? stop_cond = true : "egg"
+    gen_count > MAX_GENS ? stop_cond = true : "egg"
+
+    if gen_count > MAX_GENS
+        io = open("saved_trees.txt", "w")
+        save_tree(best_tree.root, io)
+        close(io)   
+        io = open("saved_trees.txt", "r")
+        loaded_tree = Program_Tree(1, Leaf())
+        load_tree!(loaded_tree.root, io)
+        close(io)
+
+        loaded_error = volume_sum - evaluate_chrom(loaded_tree)
+        println("\n error of loaded tree: $loaded_error\n")
+
+        print_tree(loaded_tree.root)
+
+        io2 = open("saved_loaded.txt", "w")
+        save_tree(loaded_tree.root, io2)
+        close(io2)
+    end
 end
