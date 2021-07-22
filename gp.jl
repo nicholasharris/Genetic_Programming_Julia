@@ -1,5 +1,5 @@
 #--------------------------------------------#
-#=  Genetic Programming with julia 
+#=  Genetic Programming with Julia 
         by Nick Harris              =#
 #--------------------------------------------#
 using Base: String, Number, Int64, Bool, Symbol
@@ -134,7 +134,6 @@ mutable struct Tree_Pop
     mutation_rate::Float64      # Float (0 to 1) specifying chance of a child chromosome being mutated
     max_tree_depth::Int64       # max depth of tree
     num_inputs::Int64           # number of possible inputs for trees
-    
 end
 
 #--------------------------- Constructors ---------------------------------- #
@@ -146,7 +145,7 @@ end
 #constructor for Program_Tree type
 function Program_Tree(tree_depth::Int64, num_inputs::Int64)
     root = Leaf()
-    initialize_tree_topology(tree_depth, 0, root)
+    initialize_tree_topology(tree_depth, 1, root)
     insert_children_count(root)
     initialize_tree_values(root, num_inputs)
 
@@ -161,11 +160,10 @@ function Tree_Pop(pop_size::Int64, elitism::Int64, diversity_elitism::Int64, div
 end
 
 # ------------------------------ Tree Functions ----------------------------------------------#
-# fill outs tree connections according to depth constraints, 
-#    and returns the number of total nodes created
+# fill outs tree connections according to depth constraints
 function initialize_tree_topology(tree_depth::Int64, depth::Int64, node::Leaf)
     if depth < tree_depth
-        if rand() < 0.5
+        if rand() < 0.75
             node.left_child = Leaf()
             initialize_tree_topology(tree_depth, depth + 1, node.left_child)
 
@@ -336,8 +334,13 @@ function activate(node::Leaf, inputs::Array)
             return inputs[node.value]
         end
     else  # in this case, node is an operation
+        
         #Recursively activate tree
         val = operation(node.value, activate(node.left_child, inputs), activate(node.right_child, inputs))
+
+        if node.single_op !== nothing
+            val = single_op(node.single_op, val) 
+        end
 
         if val > 999999999999.999
             return min(val, 999999999999.999)
@@ -350,13 +353,13 @@ end
 # intializes a childless leaf
 function initialize_childless(node::Leaf, num_inputs::Int64)
     roll = rand()
-    if roll < 0.334  #set node to a var
+    if roll < 0.25  #set node to a var
         node.type = "var"
         node.value = rand(1:num_inputs)
-    elseif roll < 0.534  #set node to a predefined const
+    elseif roll < 0.5  #set node to a predefined const
         node.type = "const"
         node.value = consts_dict[rand(1:length(consts_dict))]
-    elseif roll < 0.734    #set node to a random int in tight range
+    elseif roll < 0.75    #set node to a random int in tight range
         node.type = "const"
         node.value = rand(-12:1:12)
     else  #set node to a random float in wide range
@@ -364,7 +367,7 @@ function initialize_childless(node::Leaf, num_inputs::Int64)
         node.value = rand(-100.0:0.0001:100)
     end
 
-    if rand() < 0.15
+    if rand() < 0.25
         node.single_op = rand(1:length(sops_dict))
     end
 end
@@ -373,7 +376,7 @@ end
 function initialize_childed(node::Leaf)
     node.value = rand(1:length(ops_dict))
     node.type = "op"
-    if rand() < 0.15
+    if rand() < 0.25
         node.single_op = rand(1:length(sops_dict))
     end
 end

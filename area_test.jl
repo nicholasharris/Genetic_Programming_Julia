@@ -45,13 +45,13 @@ println("global funcs concluded")
 #--------------- Evolution Experiment ------------------ #
 println("\n\nStarting Evolution Test\n")
 
-Random.seed!(1234)
+#Random.seed!(1234)
 
 println("pop init: ") 
 
 #parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
-@time global my_pop = Tree_Pop(42000, 1000, 0, 4200, false, "tournament", 0.20, 4, 1)
-global MAX_GENS = 10
+@time global my_pop = Tree_Pop(42000, 100, 0, 4200, false, "tournament", 0.20, 4, 1)
+global MAX_GENS = 1000
 
 global stop_cond = false
 global gen_count = 1
