@@ -134,6 +134,7 @@ mutable struct Tree_Pop
     mutation_rate::Float64      # Float (0 to 1) specifying chance of a child chromosome being mutated
     max_tree_depth::Int64       # max depth of tree
     num_inputs::Int64           # number of possible inputs for trees
+    k_value::Int64              # optional keyword argument, k-value for tournament selection
 end
 
 #--------------------------- Constructors ---------------------------------- #
@@ -153,10 +154,10 @@ function Program_Tree(tree_depth::Int64, num_inputs::Int64)
 end
 
 #default constructor for Program_Tree population object
-function Tree_Pop(pop_size::Int64, elitism::Int64, diversity_elitism::Int64, diversity_generate::Int64, fitness_sharing::Bool, selection_algorithm::String, mutation_rate::Float64, max_tree_depth::Int64, num_inputs::Int64)
+function Tree_Pop(pop_size::Int64, elitism::Int64, diversity_elitism::Int64, diversity_generate::Int64, fitness_sharing::Bool, selection_algorithm::String, mutation_rate::Float64, max_tree_depth::Int64, num_inputs::Int64; k = 2)
     my_pop = [Program_Tree(rand(1:max_tree_depth), num_inputs) for i ∈ 1:pop_size]
     fitnesses = collect(0.0 for i ∈ 1:pop_size)
-    return Tree_Pop(my_pop, fitnesses, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs)
+    return Tree_Pop(my_pop, fitnesses, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs, k)
 end
 
 # ------------------------------ Tree Functions ----------------------------------------------#
@@ -462,6 +463,7 @@ function next_generation!(old_pop::Tree_Pop)
     global sorted_pairs = [[old_pop.pop[i] old_pop.fitnesses[i]] for i ∈ 1:length(old_pop.pop)]
     sort!(sorted_pairs, by=x->x[2], rev=true) #now in descending order
     sorted_fitnesses = [round(sorted_pairs[i][2], digits = 6) for i ∈ 1:length(old_pop.pop)]
+    global counter = countmap(sorted_fitnesses, alg= :dict)
 
     # preserve chromosomes according to elitism
     for i ∈ 1:old_pop.elitism
@@ -470,37 +472,26 @@ function next_generation!(old_pop::Tree_Pop)
 
     # preserve chromosomes according to diversity_elitism
     global diversity_count = 0
-    global fitness_record = []
-    global pop_index = old_pop.elitism + 1
+    global pop_index = 1
     while diversity_count < old_pop.diversity_elitism && pop_index < length(old_pop.pop)
         global diversity_count
-        global fitness_record
         global pop_index
+        global counter
 
-        diversity_fail = false
-
-        for r ∈ fitness_record
-            if abs(old_pop.fitnesses[pop_index] - r) < 0.001
-                diversity_fail = true
-            end
-        end
-
-        if diversity_fail == false
-            push!(fitness_record, old_pop.fitnesses[pop_index])
-            push!(new_pop, old_pop.pop[pop_index])
-            diversity_count += 1
-        end
-        pop_index += 1
+        push!(new_pop, sorted_pairs[pop_index][1])
+        diversity_count += 1
+        pop_index += counter[sorted_fitnesses[pop_index]]
     end
 
     # add new random individuals according to diversity_generate
     for i ∈ 1:old_pop.diversity_generate
-        push!(new_pop, Program_Tree(old_pop.max_tree_depth, old_pop.num_inputs))
+        if length(new_pop) < length(old_pop.pop)
+            push!(new_pop, Program_Tree(old_pop.max_tree_depth, old_pop.num_inputs))
+        end
     end
 
     normalized_fitnesses = []
     # adjust fitnesses according to fitness_sharing (if enabled)
-    counter = countmap(sorted_fitnesses, alg= :dict)
     if old_pop.fitness_sharing
         for i ∈ 1:length(sorted_fitnesses)
             if sorted_fitnesses[i] >= 0
@@ -518,7 +509,7 @@ function next_generation!(old_pop::Tree_Pop)
     if old_pop.selection_algorithm == "roulette"
         global selections = roulette_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop)) 
     elseif old_pop.selection_algorithm == "tournament"
-        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
+        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
     elseif old_pop.selection_algorithm == "ranked"
         global selections = ranked_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
     elseif old_pop.selection_algorithm == "diversity_search"
@@ -527,7 +518,7 @@ function next_generation!(old_pop::Tree_Pop)
         global selections = stochastic_universal_sampling(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
     else
         println("GP WARNING | '$(old_pop.selection_algorithm)' not a known selection algorithm. Defaulting to tournament-selection.")
-        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
+        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
     end
     
     # perform crossover between parents to create children, mutate with small probability, and populate next generation
@@ -644,9 +635,9 @@ function diversity_search(fitnesses, num_selections)
 end
 
 # performs k-way tournament selection and returns indices of selected parents
-function tournament_selection(fitnesses, num_selections) 
+function tournament_selection(fitnesses, num_selections, k_value) 
     selections = []
-    k = 2 
+    k = k_value
 
     for i ∈ 1:num_selections      
         candidates = collect(rand(1:length(fitnesses)) for j ∈ 1:k)
@@ -726,31 +717,64 @@ end
 
 # mutates a program tree by altering one node at random
 function mutate(t::Program_Tree, num_inputs::Int64, max_height::Int64)
-    while true
+    if rand() < 0.5 # strong mutate: completely replace node with random one  
+        while true
+            t2 = Program_Tree(t.depth, Leaf())
+            copy_into(t.root, t2.root)
+            
+            #select node to mutate
+            new_node = random_node(t2.root)
+
+            roll = rand()
+            if roll < 0.5  #set node to an op
+                initialize_childed(new_node)
+                if new_node.left_child === nothing
+                    new_node.left_child = Leaf()
+                    initialize_childless(new_node.left_child, num_inputs)
+                end
+                if new_node.right_child === nothing
+                    new_node.right_child = Leaf()
+                    initialize_childless(new_node.right_child, num_inputs)
+                end
+            else  #set node to a var or const
+                initialize_childless(new_node, num_inputs)
+            end
+
+            if height(t2.root) <= max_height
+                insert_children_count(t2.root)
+                return t2
+            end
+        end
+    else  #weak mutate, just modify one component of node
         t2 = Program_Tree(t.depth, Leaf())
         copy_into(t.root, t2.root)
-        
-        #select node to mutate
         new_node = random_node(t2.root)
 
         roll = rand()
-        if roll < 0.5  #set node to an op
-            initialize_childed(new_node)
-            if new_node.left_child === nothing
-                new_node.left_child = Leaf()
-                initialize_childless(new_node.left_child, num_inputs)
+        if roll < 0.25 #modify sop
+            if rand() < 0.5
+                new_node.single_op = nothing
+            else
+                new_node.single_op = rand(1:length(sops_dict))
             end
-            if new_node.right_child === nothing
-                new_node.right_child = Leaf()
-                initialize_childless(new_node.right_child, num_inputs)
+        else
+            if new_node.type == "op"
+                new_node.value = rand(1:length(ops_dict))
+            elseif new_node.type == "var"
+                new_node.value = rand(1:length(num_inputs))
+            else
+                roll2 = rand()
+                if roll2 < 0.3333333
+                    new_node.value = consts_dict[rand(1:length(consts_dict))]
+                elseif roll2 < 0.6666666
+                    new_node.value = rand(-12:1:12)
+                else
+                    new_node.value = rand(-100.0:0.0001:100)
+                end
+                       
             end
-        else  #set node to a var or const
-            initialize_childless(new_node, num_inputs)
         end
 
-        if height(t2.root) <= max_height
-            insert_children_count(t2.root)
-            return t2
-        end
+        return t2
     end
 end

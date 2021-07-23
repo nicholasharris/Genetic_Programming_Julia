@@ -14,7 +14,7 @@ println("--------------")
 @everywhere include("gp.jl")
 println("include concluded")
 
-global areas = [π*(r^2) for r ∈ 1:20]
+@everywhere global areas = [π*(r^2) for r ∈ 1:20]
 @everywhere global volumes = [(4.0/3.0)*π*(r^3) for r ∈ 1:20]
 @everywhere volume_sum = sum(volumes)
 
@@ -25,6 +25,7 @@ println("global vars concluded")
     global R = 1
     for i ∈ 1:length(volumes)
         error += abs(activate(t.root, [R]) - volumes[i])
+        #error += abs(activate(t.root, [R]) - areas[i])
         R += 1
     end
 
@@ -49,8 +50,10 @@ println("\n\nStarting Evolution Test\n")
 
 println("pop init: ") 
 
-#parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs
-@time global my_pop = Tree_Pop(42000, 100, 0, 4200, false, "tournament", 0.20, 4, 1)
+#parameters: pop_size, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs, k_value (optional)
+#@time global my_pop = Tree_Pop(42000, 0, 16800, 4200, true, "tournament", 0.2, 4, 1, k=5)
+@time global my_pop = Tree_Pop(42000, 0, 16800, 4200, true, "tournament", 0.5, 4, 1, k=13)
+#@time global my_pop = Tree_Pop(42000, 4200, 0, 4200, true, "tournament", 0.2, 4, 1, k=5)
 global MAX_GENS = 1000
 
 global stop_cond = false
