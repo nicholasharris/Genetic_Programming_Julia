@@ -2,116 +2,23 @@
 #=  Genetic Programming with Julia 
         by Nick Harris              =#
 #--------------------------------------------#
-using Base: String, Number, Int64, Bool, Symbol
-using Random
+using Base: String, Number, Float64, Bool, Symbol
+using Random, Distributions
 using StatsBase: countmap
+using Match
 
-# ------------- Elementary functions for use in program trees -------------- #
-function mean(a, b)
-    return (a + b)/2.0
-end
-
-function safe_divide(a, b)
-    if (abs(b) < 0.001)
-        return 1
-    else
-        return a/b
-    end 
-end
-
-function safe_modulo(a, b)
-    if (b > 0)
-        return a % ceil(b)
-    else
-        return 1.0
-    end
-end
-function square(x)
-    return x^2.0;
-end
-
-function cube(x)
-    return x^3.0;
-end
-
-function negate(x)
-    return -1.0 * x;
-end
-
-function inverse(x)
-    result = 0
-    abs(x) > 0.001 ? result = 1.0/x : result = 1.0
-    return result
-end
-
-function ln(x)
-    result = 0
-    x > 0.001 ? result = log(x) : result = 1.0
-    return result
-end
-
-function psqrt(x)
-    return √(abs(x)) #keep tricksy false imaginaries away!
-end
-
-function sigmoid(x)
-    return 1.0/(1 + ℯ^(-x))
-end
-
-#gompertz is a sigmoid-like function with a slower approach to the asymptote (less saturation at large values)
-function gompertz(x) #My name's Gomp
-    c = -1.0/10000.0
-    return ℯ^(-ℯ^(c*x))
-end
+include("elementary_functions.jl")
 
 #--------------- Structs, Data Types, and Predefined Objects -------------------#
-# dictionaries for operations and constants in trees
-ϕ = (1.0 + √5.0)/2.0;  #golden ratio, because nature loves the golden ratio
-ops_dict = Dict(1 => +, 
-                2 => -,
-                3 => *,
-                4 => safe_divide,
-                5 => safe_modulo,
-                6 => max,
-                7 => min,
-                8 => mean)
-sops_dict = Dict(1 => square, 
-                2 => inverse, 
-                3 => ln,
-                4 => negate,
-                5 => floor,
-                6 => ceil,
-                7 => psqrt,
-                8 => abs,
-                9 => cube) 
-consts_dict = Dict(1 => Float64(π), 
-                   2 => 0.0, 
-                   3 => 1.0, 
-                   4 => 2.0, 
-                   5 => 3.0, 
-                   6 => ϕ, 
-                   7 => Float64(ℯ)) # ℯ is the julia symbol for euler's constant
-
-#pulls an operation on 2 arguments from predefined dictionary
-function operation(n, a, b)
-    op = ops_dict[n]
-    return op(a, b)
-end    
-
-#pulls an operation on 1 argument from predefined dictionary
-function single_op(n, a)
-    sop = sops_dict[n]
-    return sop(a)  #It's a mononym - like Cher!
-end  
 
 # Leaf Type, one node of tree
 mutable struct Leaf
-    value
-    type
-    single_op
-    left_child
-    right_child
-    num_children::Int64
+    value::Union{Int64, Float64, Nothing}
+    type::Union{String, Nothing}
+    single_op::Union{Int64, Nothing}
+    left_child::Union{Leaf, Nothing}
+    right_child::Union{Leaf, Nothing}
+    num_children::Union{Int64, Nothing}
 end
 
 # Program Tree Type
@@ -122,19 +29,24 @@ end
 
 # Program_Tree population type - highest level object, to easily facilitate running an evolution experiment
 mutable struct Tree_Pop
-    pop::Array{Program_Tree}    # population of Program_Trees
-    fitnesses::Array{Float64}   # fitnesses associated with each Program_Tree
-    elitism::Int64              # number of Program_Trees to preserve as-is to the next generation
-    diversity_elitism::Int64    # number of Program_Trees with unique fitnesses to preserve as-is to the next generation
-    diversity_generate::Int64   # number of randomly-initialized Program_Trees to add to the population every generation
-    fitness_sharing::Bool       # When true, makes Program_Trees with the same fitness split the fitness amongst themselves 
-                                    # stops one chromomsome from taking over the population; 
-                                    # in evolutionary terms, stops niche-crowding
-    selection_algorithm::String # String specifying which selection algorithm (roulette, tournament, ranked, etc) to use in GA
-    mutation_rate::Float64      # Float (0 to 1) specifying chance of a child chromosome being mutated
-    max_tree_depth::Int64       # max depth of tree
-    num_inputs::Int64           # number of possible inputs for trees
-    k_value::Int64              # optional keyword argument, k-value for tournament selection
+    pop::Array{Program_Tree}            # population of Program_Trees
+    fitnesses::Array{Float64}           # fitnesses associated with each Program_Tree
+    elitism::Int64                      # number of Program_Trees to preserve as-is to the next generation
+    mutant_elitism::Int64               # number of Program_Trees that are mutant copies of those in the elitism pool,
+                                            # added to the population in advance of crossover
+    diversity_elitism::Int64            # number of Program_Trees with unique fitnesses to preserve as-is to the next generation
+    mutant_diversity_elitism::Int64     # number of trees to add as mutant copies from the diversity_elitism pool,
+                                          #  added to the population in advance of crossover
+    diversity_generate::Int64           # number of randomly-initialized Program_Trees to add to the population every generation
+    variable_preserve::Int64
+    fitness_sharing::Bool               # When true, makes Program_Trees with the same fitness split the fitness amongst themselves 
+                                            # stops one chromomsome from taking over the population; 
+                                            # in evolutionary terms, stops niche-crowding
+    selection_algorithm::String         # String specifying which selection algorithm (roulette, tournament, ranked, etc) to use in GA
+    mutation_rate::Float64              # Float (0 to 1) specifying chance of a child chromosome being mutated
+    max_tree_depth::Int64               # max depth of tree
+    num_inputs::Int64                   # number of possible inputs for trees
+    k_value                      # optional keyword argument, k-value for tournament selection
 end
 
 #--------------------------- Constructors ---------------------------------- #
@@ -144,7 +56,7 @@ function Leaf()
 end
 
 #constructor for Program_Tree type
-function Program_Tree(tree_depth::Int64, num_inputs::Int64)
+function Program_Tree(tree_depth, num_inputs)
     root = Leaf()
     initialize_tree_topology(tree_depth, 1, root)
     insert_children_count(root)
@@ -154,10 +66,12 @@ function Program_Tree(tree_depth::Int64, num_inputs::Int64)
 end
 
 #default constructor for Program_Tree population object
-function Tree_Pop(pop_size::Int64, elitism::Int64, diversity_elitism::Int64, diversity_generate::Int64, fitness_sharing::Bool, selection_algorithm::String, mutation_rate::Float64, max_tree_depth::Int64, num_inputs::Int64; k = 2)
-    my_pop = [Program_Tree(rand(1:max_tree_depth), num_inputs) for i ∈ 1:pop_size]
+function Tree_Pop(pop_size::Int64, elitism::Int64, mutant_elitism::Int64, diversity_elitism::Int64, mutant_diversity_elitism::Int64, diversity_generate::Int64, variable_preseve::Int64,
+     fitness_sharing::Bool, selection_algorithm::String, mutation_rate::Float64, max_tree_depth::Int64, num_inputs::Int64; k = 2)
+
+    my_pop = [Program_Tree(max_tree_depth, num_inputs) for i ∈ 1:pop_size]
     fitnesses = collect(0.0 for i ∈ 1:pop_size)
-    return Tree_Pop(my_pop, fitnesses, elitism, diversity_elitism, diversity_generate, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs, k)
+    return Tree_Pop(my_pop, fitnesses, elitism, mutant_elitism, diversity_elitism, mutant_diversity_elitism, diversity_generate, variable_preseve, fitness_sharing, selection_algorithm, mutation_rate, max_tree_depth, num_inputs, k)
 end
 
 # ------------------------------ Tree Functions ----------------------------------------------#
@@ -186,7 +100,7 @@ function initialize_tree_values(node::Leaf, num_inputs::Int64)
 end
 
 # this is used to fill children counts 
-function get_elements(root)
+function get_elements(root::Union{Leaf, Nothing})
     if root === nothing
         return 0
     end
@@ -194,7 +108,7 @@ function get_elements(root)
 end
 
 # inserts children count for each node
-function insert_children_count(root)
+function insert_children_count(root::Union{Leaf, Nothing})
     if root === nothing
         return
     end
@@ -204,16 +118,16 @@ function insert_children_count(root)
 end
 
 # returns number of children for root
-function num_children(root)
+function num_children(root::Union{Leaf, Nothing})
     if root === nothing
         return 0
     end
-    return root.num_children + 1   #Why does num_children() return a different value than someLeaf.num_children ?
-                                        # I dunno, got this shitty code off the internet to make the random_node function work
+    return root.num_children + 1  
+                                        
 end
 
 # helper function to return a random node
-function random_node_util(root, count)
+function random_node_util(root::Union{Leaf, Nothing}, count::Int64)
     if root === nothing
         return 0
     end
@@ -230,7 +144,7 @@ function random_node_util(root, count)
 end
 
 # returns a random node from a tree
-function random_node(root)
+function random_node(root::Leaf)
     count = rand(0:root.num_children)
     return random_node_util(root, count)
 end
@@ -311,7 +225,7 @@ function print_subtree(root::Leaf, prefix::String)
 end
 
 #calculates height of a tree
-function height(leaf)
+function height(leaf::Union{Leaf, Nothing})
     if leaf === nothing
         return 0
     end
@@ -321,54 +235,51 @@ function height(leaf)
 end
 
 # function to activate tree and compute result
-function activate(node::Leaf, inputs::Array)
-    if node.type == "const"
-        if node.single_op !== nothing
-            return single_op(node.single_op, node.value)
-        else
-            return node.value
-        end
-    elseif node.type == "var"
-        if node.single_op !== nothing
-            return single_op(node.single_op, inputs[node.value])
-        else
-            return inputs[node.value]
-        end
-    else  # in this case, node is an operation
-        
-        #Recursively activate tree
-        val = operation(node.value, activate(node.left_child, inputs), activate(node.right_child, inputs))
+function activate(node, inputs)
+    @match node begin
+        Leaf(value, "const", sop::Nothing, _, _, _) => return clamp(value, -100000, 100000)
+        Leaf(value, "const", sop::Int64, _, _, _) => return clamp(single_op(sop, value), -100000, 100000)
+        Leaf(value, "var", sop::Nothing, _, _, _) => return clamp(inputs[value], -100000, 100000)
+        Leaf(value, "var", sop::Int64, _, _, _) => return clamp(single_op(sop, clamp(inputs[value], -100000, 100000)), -100000, 100000)
+        Leaf(value, "op", sop::Nothing, left, right, _) => return clamp(operation(value, activate(left, inputs), activate(right, inputs)), -100000, 100000)
+        Leaf(value, "op", sop::Int64, left, right, _) => return clamp(single_op(sop, operation(value, activate(left, inputs), activate(right, inputs))), -100000, 100000)
+        _ => println("This is what I got, and I'm not happy about it: ($(node.value), $(node.type), $(node.single_op), $(node.left_child), $(node.right_child), $(node.num_children))")
+    end
+end
 
-        if node.single_op !== nothing
-            val = single_op(node.single_op, val) 
-        end
-
-        if val > 999999999999.999
-            return min(val, 999999999999.999)
-        else
-            return max(val, -999999999999.999)
-        end
+#second activation function to accept entire matrix and index for access (for working with shared arrays)
+function activate(node, inputs, row_index)
+    @match node begin
+        Leaf(value, "const", sop::Nothing, _, _, _) => return clamp(value, -100000, 100000)
+        Leaf(value, "const", sop::Int64, _, _, _) => return clamp(single_op(sop, value), -100000, 100000)
+        Leaf(value, "var", sop::Nothing, _, _, _) => return clamp(inputs[row_index, value], -100000, 100000)
+        Leaf(value, "var", sop::Int64, _, _, _) => return clamp(single_op(sop, clamp(inputs[row_index, value], -1000000, 100000)), -1000000, 100000)
+        Leaf(value, "op", sop::Nothing, left, right, _) => return clamp(operation(value, activate(left, inputs, row_index), activate(right, inputs, row_index)), -1000000, 100000)
+        Leaf(value, "op", sop::Int64, left, right, _) => return clamp(single_op(sop, operation(value, activate(left, inputs, row_index), activate(right, inputs, row_index))), -1000000, 100000)
+        _ => println("This is what I got, and I'm not happy about it: ($(node.value), $(node.type), $(node.single_op), $(node.left_child), $(node.right_child), $(node.num_children))")
     end
 end
 
 # intializes a childless leaf
 function initialize_childless(node::Leaf, num_inputs::Int64)
-    roll = rand()
-    if roll < 0.25  #set node to a var
+    if rand() < 0.66  #set node to a var
         node.type = "var"
         node.value = rand(1:num_inputs)
-    elseif roll < 0.5  #set node to a predefined const
+    else
+        roll = rand()
         node.type = "const"
-        node.value = consts_dict[rand(1:length(consts_dict))]
-    elseif roll < 0.75    #set node to a random int in tight range
-        node.type = "const"
-        node.value = rand(-12:1:12)
-    else  #set node to a random float in wide range
-        node.type = "const"
-        node.value = rand(-100.0:0.0001:100)
+        if roll < 0.25 # set not to const in range (0, 1)
+            node.value = rand() 
+        elseif roll < 0.5  #set node to a predefined const
+            node.value = consts_dict[rand(1:length(consts_dict))]
+        elseif roll < 0.75    #set node to a random int in tight range
+            node.value = rand(-12:1:12)
+        else  #set node to a random float in wide range
+            node.value = rand(-100.0:0.0001:100)
+        end
     end
 
-    if rand() < 0.25
+    if rand() < 0.33
         node.single_op = rand(1:length(sops_dict))
     end
 end
@@ -382,24 +293,8 @@ function initialize_childed(node::Leaf)
     end
 end
 
-#copies one tree structure into another
-function copy_into(node::Leaf, new_node::Leaf)
-    new_node.value = node.value
-    new_node.type = node.type
-    new_node.single_op = node.single_op
-    new_node.num_children = node.num_children
-    if node.left_child !== nothing
-        new_node.left_child = Leaf()
-        copy_into(node.left_child, new_node.left_child)
-    end
-    if node.right_child !== nothing
-        new_node.right_child = Leaf()
-        copy_into(node.right_child, new_node.right_child)
-    end
-end
-
 #prints program tree to a file so it can be saved and recovered later
-function save_tree(node, outfile::IOStream)
+function save_tree(node::Union{Leaf, Nothing}, outfile::IOStream)
     if node === nothing
         write(outfile, "∅ ")
     else
@@ -414,7 +309,7 @@ function save_tree(node, outfile::IOStream)
 end
 
 #reads a tree from a file and loads it into object
-function load_tree!(node, infile::IOStream)
+function load_tree!(node::Leaf, infile::IOStream)
     s_list =  split(read(infile, String), " ")
     if length(s_list) < 1
         return
@@ -432,7 +327,7 @@ function load_helper!(node, s_list::Array)
     else # we should have a valid node on our hands
         element_list = split(s_list[1], "|")
         if element_list[1] != "⦱" #sop is not none 
-            node.single_op = parse(Int64, element_list[1])
+            node.single_op = parse(Int32, element_list[1])
         end
         node.type = element_list[2]
         if node.type == "var" || node.type == "op"
@@ -457,91 +352,135 @@ end
 # function to compute the next population of the genetic algorithm 
 #   Using selection, mutation, and crossover operations
 function next_generation!(old_pop::Tree_Pop)
-    global new_pop = []
+    new_pop = []
+    new_fitnesses = []
 
     # sort chromosome-fitness pairs in order of fitness
-    global sorted_pairs = [[old_pop.pop[i] old_pop.fitnesses[i]] for i ∈ 1:length(old_pop.pop)]
+    sorted_pairs = [[old_pop.pop[i] old_pop.fitnesses[i]] for i ∈ eachindex(old_pop.pop)]
     sort!(sorted_pairs, by=x->x[2], rev=true) #now in descending order
-    sorted_fitnesses = [round(sorted_pairs[i][2], digits = 6) for i ∈ 1:length(old_pop.pop)]
-    global counter = countmap(sorted_fitnesses, alg= :dict)
+    sorted_fitnesses = [round(sorted_pairs[i][2], digits = 12) for i ∈ eachindex(old_pop.pop)]
+    counter = countmap(sorted_fitnesses, alg= :dict)
 
     # preserve chromosomes according to elitism
     for i ∈ 1:old_pop.elitism
         push!(new_pop, sorted_pairs[i][1])
+        push!(new_fitnesses, sorted_pairs[i][2])
     end
 
     # preserve chromosomes according to diversity_elitism
-    global diversity_count = 0
-    global pop_index = 1
+    diversity_count = 0
+    pop_index = 1
+    diversity_indices = []
     while diversity_count < old_pop.diversity_elitism && pop_index < length(old_pop.pop)
-        global diversity_count
-        global pop_index
-        global counter
-
         push!(new_pop, sorted_pairs[pop_index][1])
+        push!(new_fitnesses, sorted_pairs[pop_index][2])
+        push!(diversity_indices, pop_index)
         diversity_count += 1
         pop_index += counter[sorted_fitnesses[pop_index]]
     end
+
+    # add chromosomes according to mutant elitism
+    for i ∈ 1:old_pop.mutant_elitism
+        new_indiv = mutate(sorted_pairs[1][1], old_pop.num_inputs, old_pop.max_tree_depth)
+        stop_cond = false
+        while stop_cond == false
+            if rand() < 0.5
+                new_indiv = mutate(new_indiv, old_pop.num_inputs, old_pop.max_tree_depth)
+            else
+                stop_cond = true
+                push!(new_pop, new_indiv)   
+                push!(new_fitnesses, 0.0)           
+            end
+        end
+    end
+
+    #add chroms from mutant-diversity elitism
+    mutant_diversity_count = old_pop.mutant_diversity_elitism
+    if mutant_diversity_count > 0
+        d_index = rand(diversity_indices)
+        new_indiv = mutate(sorted_pairs[d_index][1], old_pop.num_inputs, old_pop.max_tree_depth)
+        stop_cond = false
+        while stop_cond == false
+            if rand() < 0.5
+                new_indiv = mutate(new_indiv, old_pop.num_inputs, old_pop.max_tree_depth)
+            else
+                stop_cond = true
+                push!(new_pop, new_indiv)  
+                push!(new_fitnesses, 0.0)
+                mutant_diversity_count -= 1            
+            end
+        end
+    end 
 
     # add new random individuals according to diversity_generate
     for i ∈ 1:old_pop.diversity_generate
         if length(new_pop) < length(old_pop.pop)
             push!(new_pop, Program_Tree(old_pop.max_tree_depth, old_pop.num_inputs))
+            push!(new_fitnesses, 0.0)
         end
     end
 
+    #add new individuals according to variable_preserve
+    for i ∈ 1:old_pop.variable_preserve
+        new_leaf = Leaf(i, "var", nothing, nothing, nothing, 0)
+        new_tree = Program_Tree(1, new_leaf)
+        push!(new_pop, new_tree)
+        push!(new_fitnesses, 0.0)
+    end
+
     normalized_fitnesses = []
-    # adjust fitnesses according to fitness_sharing (if enabled)
+    # adjust fitnesses according to fitness_sharing (if enabled)   #----------------- ALERT Pretty sure this fucks stuff up for some selection algorithms ------------------#
     if old_pop.fitness_sharing
-        for i ∈ 1:length(sorted_fitnesses)
+        for i ∈ eachindex(sorted_fitnesses)
             if sorted_fitnesses[i] >= 0
-                push!(normalized_fitnesses, sorted_fitnesses[i]/counter[sorted_fitnesses[i]])
+                push!(normalized_fitnesses, Float64(sorted_fitnesses[i]/counter[sorted_fitnesses[i]]))
             else
-                push!(normalized_fitnesses, sorted_fitnesses[i]*counter[sorted_fitnesses[i]])
+                push!(normalized_fitnesses, Float64(sorted_fitnesses[i]*counter[sorted_fitnesses[i]]))
             end
         end
-        sort!(normalized_fitnesses, rev=true) #re-sorted after normalization
+        #sort!(normalized_fitnesses, rev=true) #re-sorted after normalization  #this fucks shit up, doesn't it?
     else
         normalized_fitnesses = sorted_fitnesses
     end
 
     # perform selection algorithm to select parents for next generation
     if old_pop.selection_algorithm == "roulette"
-        global selections = roulette_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop)) 
+         selections = roulette_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop)) 
     elseif old_pop.selection_algorithm == "tournament"
-        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
+         selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
     elseif old_pop.selection_algorithm == "ranked"
-        global selections = ranked_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
+         selections = ranked_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
     elseif old_pop.selection_algorithm == "diversity_search"
-        global selections = diversity_search(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
+         selections = diversity_search(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop), counter)
     elseif old_pop.selection_algorithm == "SUS"
-        global selections = stochastic_universal_sampling(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
+         selections = stochastic_universal_sampling(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop))
     else
         println("GP WARNING | '$(old_pop.selection_algorithm)' not a known selection algorithm. Defaulting to tournament-selection.")
-        global selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
+         selections = tournament_selection(normalized_fitnesses, length(normalized_fitnesses) - length(new_pop),  old_pop.k_value)
     end
     
     # perform crossover between parents to create children, mutate with small probability, and populate next generation
-    global s_index = 1
+    s_index = 1
     while length(new_pop) < length(old_pop.pop)
-        global selections
-        global sorted_pairs
-        global new_pop
-        global s_index
-
         #crossover to create child
-        child = crossover(sorted_pairs[selections[s_index][1]][1], sorted_pairs[selections[s_index][2]][1], old_pop.max_tree_depth)
+        if rand() < 0.9  #90% chance to perform crossover, but small chance a chromosome is passed uncrossed 
+            child = crossover(sorted_pairs[selections[s_index][1]][1], sorted_pairs[selections[s_index][2]][1], old_pop.max_tree_depth, old_pop.num_inputs)
+        else
+            choice = rand(1:2)
+            child = sorted_pairs[selections[s_index][choice]][1]
+        end
         
         #mutate child with some probability
         if rand() < old_pop.mutation_rate
             child = mutate(child, old_pop.num_inputs, old_pop.max_tree_depth)
         end
         push!(new_pop, child)    
+        push!(new_fitnesses, 0.0)
         s_index += 1
     end
 
     old_pop.pop = new_pop
-    old_pop.fitnesses = [0.0 for i ∈ 1:length(old_pop.fitnesses)]
+    old_pop.fitnesses = new_fitnesses
 end
 
 # performs fitness-proportional (aka roulette-wheel) selection and returns indices of selected parents
@@ -552,7 +491,7 @@ function roulette_selection(fitnesses, num_selections)
     roulette_wheel = []
     fitness_proportions = []
     fitness_total = sum(fitnesses)
-    for i ∈ 1:length(fitnesses)
+    for i ∈ eachindex(fitnesses)
         push!(fitness_proportions, fitnesses[i]/fitness_total)
         i == 1 ? push!(roulette_wheel, fitness_proportions[i]) : push!(roulette_wheel, roulette_wheel[i - 1] + fitness_proportions[i])
     end
@@ -560,10 +499,10 @@ function roulette_selection(fitnesses, num_selections)
     points = sort([rand() for i ∈ 1:(2*num_selections)])
     flat_selections = []
 
-    global j = 1 
+     j = 1 
     for i ∈ 1:(2*num_selections)       
         while roulette_wheel[j] < points[i]
-            global j
+             j
             j += 1
         end
         push!(flat_selections, j)
@@ -584,7 +523,7 @@ function stochastic_universal_sampling(fitnesses, num_selections)
     roulette_wheel = []
     fitness_proportions = []
     fitness_total = sum(fitnesses)
-    for i ∈ 1:length(fitnesses)
+    for i ∈ eachindex(fitnesses)
         push!(fitness_proportions, fitnesses[i]/fitness_total)
         i == 1 ? push!(roulette_wheel, fitness_proportions[i]) : push!(roulette_wheel, roulette_wheel[i - 1] + fitness_proportions[i])
     end
@@ -596,10 +535,10 @@ function stochastic_universal_sampling(fitnesses, num_selections)
 
     flat_selections = []
 
-    global j = 1 
+     j = 1 
     for i ∈ 1:N       
         while roulette_wheel[j] < points[i]
-            global j
+             j
             j += 1
         end
         push!(flat_selections, j)
@@ -613,15 +552,16 @@ function stochastic_universal_sampling(fitnesses, num_selections)
 end
 
 # performs diversity-search selection and returns indices of selected parents
-function diversity_search(fitnesses, num_selections)
+function diversity_search(fitnesses, num_selections, counter)
     selections = []
 
     eligible_individuals = []
 
     #adjust fitnesses (all unique fitnesses equal; all not-unique fitnesses = 0)
-    for i ∈ 1:length(fitnesses)
-        if count(j->(abs(j - fitnesses[i]) < 0.001), fitnesses) < 2
-            push!(eligible_individuals, i)  #congratulations, you're not a basic bitch
+    for i ∈ eachindex(fitnesses)
+        #if count(j->(abs(j - fitnesses[i]) < 0.0000000001), fitnesses) < 2
+        if counter[fitnesses[i]] < 2
+            push!(eligible_individuals, i)  
         end
     end
 
@@ -635,7 +575,7 @@ function diversity_search(fitnesses, num_selections)
 end
 
 # performs k-way tournament selection and returns indices of selected parents
-function tournament_selection(fitnesses, num_selections, k_value) 
+function tournament_selection(fitnesses, num_selections::Int64, k_value::Int64) 
     selections = []
     k = k_value
 
@@ -654,61 +594,129 @@ function tournament_selection(fitnesses, num_selections, k_value)
     return selections
 end
 
+# version of tournament selection with even less selective pressure than k=2, taking a float value for k
+function tournament_selection(fitnesses, num_selections::Int64, k_value::Float64) 
+    selections = []
+    k = 2
+
+    for i ∈ 1:num_selections      
+        candidates = collect(rand(1:length(fitnesses)) for j ∈ 1:k)
+        cand_fitnesses = collect(fitnesses[c] for c ∈ candidates)  
+
+        win_index = argmax(cand_fitnesses)
+        
+        if rand() < k_value
+            winner1 = candidates[win_index]
+        else
+            if win_index == 1
+                winner1 = candidates[2]
+            else
+                winner1 = candidates[1]
+            end
+        end
+
+        candidates = collect(rand(1:length(fitnesses)) for j ∈ 1:k)
+        cand_fitnesses = collect(fitnesses[c] for c ∈ candidates)
+        
+        win_index = argmax(cand_fitnesses)
+        
+        if rand() < k_value
+            winner2 = candidates[win_index]
+        else
+            if win_index == 1
+                winner2 = candidates[2]
+            else
+                winner2 = candidates[1]
+            end
+        end
+
+        push!(selections, [winner1 winner2])
+    end
+
+    return selections
+end
+
 # performs ranked selection and returns indices of selected parents
 function ranked_selection(fitnesses, num_selections) 
     ranked_fitnesses = reverse(collect(1:length(fitnesses)))
     return roulette_selection(ranked_fitnesses, num_selections)
 end
 
+#Function to trim tree down to size if it exceeds max_depth
+function trim!(node::Leaf, max_depth, current_depth, num_inputs)
+    if current_depth == max_depth
+        node.left_child = nothing
+        node.right_child = nothing
+
+        if node.type == "op"
+            node = initialize_childless(node, num_inputs)
+        end
+        return nothing
+    end
+
+    if node.left_child !== nothing
+        trim!(node.left_child, max_depth, current_depth + 1, num_inputs)
+        trim!(node.right_child, max_depth, current_depth + 1, num_inputs)
+    end
+
+    return nothing
+end
+
 # performs crossover operations between trees
-function crossover(t1::Program_Tree, t2::Program_Tree, max_tree_depth::Int64)
-    while true #runs until a child that is not too large is created
-        #copy over parents into new objects
-        global chrom1 = Program_Tree(t1.depth, Leaf())
-        global chrom2 = Program_Tree(t2.depth, Leaf())
-        copy_into(t1.root, chrom1.root)
-        copy_into(t2.root, chrom2.root)
+function crossover(t1::Program_Tree, t2::Program_Tree, max_tree_depth::Int64, num_inputs)        
+    roll = rand()
+    #copy over parents into new objects
+    if roll < 0.5
+        chrom1 = deepcopy(t1)
+        chrom2 = deepcopy(t2)
+    else
+        chrom1 = deepcopy(t2)
+        chrom2 = deepcopy(t1)
+    end
 
-        #select nodes to cross (segments of trees to transplant)
-        node1 = random_node(chrom1.root)
-        node2 = random_node(chrom2.root)
+    #select nodes to cross (segments of trees to transplant)
+    node1 = random_node(chrom1.root)
+    node2 = random_node(chrom2.root)
 
-        #cross nodes
-        temp = Leaf()
-        temp.type = node1.type
-        temp.value = node1.value
+    #cross nodes (only 50% chance to grab single-op as well)
+    temp = Leaf()
+    
+    temp.type = node1.type
+    temp.value = node1.value
+    if rand() < 0.5 
         temp.single_op = node1.single_op
-        temp.left_child = node1.left_child
-        temp.right_child = node1.right_child
+    end
+    temp.left_child = node1.left_child
+    temp.right_child = node1.right_child
 
-        node1.type = node2.type
-        node1.value = node2.value
+    node1.type = node2.type
+    node1.value = node2.value
+    if rand() < 0.5
         node1.single_op = node2.single_op
-        node1.left_child = node2.left_child
-        node1.right_child = node2.right_child
+    end
+    node1.left_child = node2.left_child
+    node1.right_child = node2.right_child
 
-        node2.type = temp.type
-        node2.value = temp.value
-        node2.single_op = temp.single_op
-        node2.left_child = temp.left_child
-        node2.right_child = temp.right_child
+    node2.type = temp.type
+    node2.value = temp.value
+    node2.single_op = temp.single_op
+    node2.left_child = temp.left_child
+    node2.right_child = temp.right_child
 
-        #alter nodes after crossing to keep the program tree valid
-        if node1.type != "op"
-            node1.left_child = nothing
-            node1.right_child = nothing
-        end
-
-        if node2.type != "op"
-            node2.left_child = nothing
-            node2.right_child = nothing
-        end
-
-        #return if resulting tree does not exceed height limit
-        if height(chrom1.root) <= max_tree_depth
+    #return if resulting tree does not exceed height limit
+    if height(chrom1.root) <= max_tree_depth
+        insert_children_count(chrom1.root)
+        return chrom1
+    elseif height(chrom2.root) <= max_tree_depth
+        insert_children_count(chrom2.root)
+        return chrom2
+    else
+        if rand() < 0.5
+            trim!(chrom1, max_tree_depth, 1, num_inputs)
             insert_children_count(chrom1.root)
             return chrom1
-        elseif height(chrom2.root) <= max_tree_depth
+        else
+            trim!(chrom2, max_tree_depth, 1, num_inputs)
             insert_children_count(chrom2.root)
             return chrom2
         end
@@ -718,41 +726,43 @@ end
 # mutates a program tree by altering one node at random
 function mutate(t::Program_Tree, num_inputs::Int64, max_height::Int64)
     if rand() < 0.5 # strong mutate: completely replace node with random one  
-        while true
-            t2 = Program_Tree(t.depth, Leaf())
-            copy_into(t.root, t2.root)
-            
-            #select node to mutate
-            new_node = random_node(t2.root)
+        t2 = deepcopy(t)
+        
+        #select node to mutate
+        new_node = random_node(t2.root)
 
-            roll = rand()
-            if roll < 0.5  #set node to an op
-                initialize_childed(new_node)
-                if new_node.left_child === nothing
-                    new_node.left_child = Leaf()
-                    initialize_childless(new_node.left_child, num_inputs)
-                end
-                if new_node.right_child === nothing
-                    new_node.right_child = Leaf()
-                    initialize_childless(new_node.right_child, num_inputs)
-                end
-            else  #set node to a var or const
-                initialize_childless(new_node, num_inputs)
+        roll = rand()
+        if roll < 0.33  #set node to an op
+            initialize_childed(new_node)
+            if new_node.left_child === nothing
+                new_node.left_child = Leaf()
+                initialize_childless(new_node.left_child, num_inputs)
             end
+            if new_node.right_child === nothing
+                new_node.right_child = Leaf()
+                initialize_childless(new_node.right_child, num_inputs)
+            end
+        else  #set node to a var or const
+            new_node.left_child = nothing
+            new_node.right_child = nothing
+            initialize_childless(new_node, num_inputs)
+        end
 
-            if height(t2.root) <= max_height
-                insert_children_count(t2.root)
-                return t2
-            end
+        if height(t2.root) <= max_height
+            insert_children_count(t2.root)
+            return t2
+        else
+            trim!(t2.root, max_height, 1, num_inputs)
+            insert_children_count(t2.root)
+            return t2
         end
     else  #weak mutate, just modify one component of node
-        t2 = Program_Tree(t.depth, Leaf())
-        copy_into(t.root, t2.root)
+        t2 = deepcopy(t)
         new_node = random_node(t2.root)
 
         roll = rand()
         if roll < 0.25 #modify sop
-            if rand() < 0.5
+            if rand() < 0.15
                 new_node.single_op = nothing
             else
                 new_node.single_op = rand(1:length(sops_dict))
@@ -763,15 +773,13 @@ function mutate(t::Program_Tree, num_inputs::Int64, max_height::Int64)
             elseif new_node.type == "var"
                 new_node.value = rand(1:length(num_inputs))
             else
-                roll2 = rand()
-                if roll2 < 0.3333333
-                    new_node.value = consts_dict[rand(1:length(consts_dict))]
-                elseif roll2 < 0.6666666
-                    new_node.value = rand(-12:1:12)
-                else
-                    new_node.value = rand(-100.0:0.0001:100)
+                # Center gaussian distribution on constant and modify it
+                sig = abs(new_node.value)/10.0
+                if sig == 0
+                    sig = 0.01
                 end
-                       
+                dist = Normal( new_node.value, sig )
+                new_node.value = rand(dist)  
             end
         end
 
